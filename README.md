@@ -9,8 +9,10 @@ masabe/english-pronunciation-audio
 It downloads pronunciation MP3 files from the configured source JSON on a GitHub Actions runner and uploads them to the dataset as:
 
 ```text
-words/<word>.mp3
+words/<first-letter>/<word>.mp3
 ```
+
+Old flat files under `words/<word>.mp3` can remain in the dataset. The browser extension tries the sharded path first, then the old flat path for backward compatibility.
 
 ## GitHub Secret
 

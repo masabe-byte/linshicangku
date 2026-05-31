@@ -24,6 +24,16 @@ function isImportableWord(value) {
   return /^[a-z][a-z'-]{1,39}$/.test(value);
 }
 
+function wordPath(word) {
+  const encoded = encodeURIComponent(word);
+  const bucket = /^[a-z]/.test(word) ? word[0] : "_";
+  return `words/${bucket}/${encoded}.mp3`;
+}
+
+function legacyWordPath(word) {
+  return `words/${encodeURIComponent(word)}.mp3`;
+}
+
 function collectAudioUrls(value, output = []) {
   if (typeof value === "string") {
     if (/^https?:\/\//i.test(value)) output.push(value);
@@ -134,12 +144,14 @@ async function prepareBatch(entries, wordsDir, dryRun) {
 
   for (const entry of entries) {
     const [word, urls] = entry;
-    const file = path.join(wordsDir, `${encodeURIComponent(word)}.mp3`);
+    const relativePath = wordPath(word);
+    const file = path.join(wordsDir, relativePath.replace(/^words\//, ""));
     try {
+      await fs.mkdir(path.dirname(file), { recursive: true });
       if (dryRun) {
         prepared += 1;
         attemptedUrls += Math.min(urls.length, 1);
-        console.log(`OK ${word} -> words/${encodeURIComponent(word)}.mp3 (dry-run, ${urls.length} candidate urls)`);
+        console.log(`OK ${word} -> ${relativePath} (dry-run, ${urls.length} candidate urls)`);
         continue;
       }
 
@@ -147,7 +159,7 @@ async function prepareBatch(entries, wordsDir, dryRun) {
       attemptedUrls += result.attempts;
       if (!result.ok) throw new Error(result.error || "all_urls_failed");
       prepared += 1;
-      console.log(`OK ${word} -> words/${encodeURIComponent(word)}.mp3 (${result.bytes} bytes, url ${result.attempts}/${urls.length})`);
+      console.log(`OK ${word} -> ${relativePath} (${result.bytes} bytes, url ${result.attempts}/${urls.length})`);
     } catch (error) {
       failed += 1;
       failures.push({ word, urls: urls.length, error: error.message });
@@ -165,7 +177,7 @@ function selectBatch(entries, existing, mode, offset, limit) {
     for (let index = offset; index < entries.length && batch.length < limit; index += 1) {
       const [word] = entries[index];
       scanned += 1;
-      if (!existing.has(`words/${encodeURIComponent(word)}.mp3`)) batch.push(entries[index]);
+      if (!existing.has(wordPath(word)) && !existing.has(legacyWordPath(word))) batch.push(entries[index]);
     }
     return { batch, scanned };
   }
@@ -216,7 +228,7 @@ async function main() {
         runHfUpload(repoId, tempDir);
         for (const [word] of selected.batch) {
           if (!result.failures.some((failure) => failure.word === word)) {
-            existing.add(`words/${encodeURIComponent(word)}.mp3`);
+            existing.add(wordPath(word));
           }
         }
       }
