@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-const DEFAULT_SOURCE_JSON = "https://raw.githubusercontent.com/thousandlemons/English-words-pronunciation-mp3-audio-download/master/data.json";
+const DEFAULT_SOURCE_JSON = "https://raw.githubusercontent.com/thousandlemons/English-words-pronunciation-mp3-audio-download/master/ultimate.json";
 const DEFAULT_HF_REPO_ID = "masabe/english-pronunciation-audio";
+const HF_TREE_PAGE_SIZE = 1000;
+const MIN_AUDIO_BYTES = 200;
 
 function envNumber(name, fallback) {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -22,16 +24,23 @@ function isImportableWord(value) {
   return /^[a-z][a-z'-]{1,39}$/.test(value);
 }
 
-function getFirstAudioUrl(value) {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.find((item) => typeof item === "string") || "";
-  if (value && typeof value === "object") {
-    for (const item of Object.values(value)) {
-      const url = getFirstAudioUrl(item);
-      if (url) return url;
-    }
+function collectAudioUrls(value, output = []) {
+  if (typeof value === "string") {
+    if (/^https?:\/\//i.test(value)) output.push(value);
+    return output;
   }
-  return "";
+  if (Array.isArray(value)) {
+    for (const item of value) collectAudioUrls(item, output);
+    return output;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) collectAudioUrls(item, output);
+  }
+  return output;
+}
+
+function uniqueUrls(urls) {
+  return [...new Set(urls.map((url) => String(url || "").trim()).filter((url) => /^https?:\/\//i.test(url)))];
 }
 
 async function readJson(source) {
@@ -44,26 +53,40 @@ async function readJson(source) {
 }
 
 function toEntries(json) {
-  if (Array.isArray(json)) {
-    return json
-      .map((item) => [normalizeWord(item?.word || item?.text || item?.name), getFirstAudioUrl(item?.url || item?.audio || item?.mp3 || item)])
-      .filter(([word, url]) => isImportableWord(word) && /^https?:\/\//i.test(url));
-  }
-  return Object.entries(json)
-    .map(([word, value]) => [normalizeWord(word), getFirstAudioUrl(value)])
-    .filter(([word, url]) => isImportableWord(word) && /^https?:\/\//i.test(url));
+  const rawEntries = Array.isArray(json)
+    ? json.map((item) => [item?.word || item?.text || item?.name, item?.url || item?.audio || item?.mp3 || item])
+    : Object.entries(json);
+
+  return rawEntries
+    .map(([word, value]) => [normalizeWord(word), uniqueUrls(collectAudioUrls(value))])
+    .filter(([word, urls]) => isImportableWord(word) && urls.length > 0);
 }
 
 async function downloadAudio(url, file) {
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "Soil-Pronunciation-HF-Importer/0.1",
+      "User-Agent": "Mozilla/5.0 Soil-Pronunciation-HF-Importer/0.2",
+      "Accept": "audio/mpeg,audio/*,*/*;q=0.8",
     },
   });
-  if (!response.ok) throw new Error(`Audio fetch failed: ${response.status} ${response.statusText}`);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength < 200) throw new Error("Audio file is too small");
+  if (bytes.byteLength < MIN_AUDIO_BYTES) throw new Error(`too_small_${bytes.byteLength}`);
   await fs.writeFile(file, bytes);
+  return bytes.byteLength;
+}
+
+async function downloadFirstAvailableAudio(urls, file) {
+  const errors = [];
+  for (const url of urls) {
+    try {
+      const bytes = await downloadAudio(url, file);
+      return { ok: true, url, bytes, attempts: errors.length + 1 };
+    } catch (error) {
+      errors.push(`${url} -> ${error.message}`);
+    }
+  }
+  return { ok: false, attempts: errors.length, error: errors.slice(0, 4).join(" | ") };
 }
 
 function runHfUpload(repoId, folder) {
@@ -79,32 +102,81 @@ function runHfUpload(repoId, folder) {
   return result.stdout;
 }
 
-async function prepareBatch(entries, offset, limit, wordsDir, dryRun) {
-  const batch = entries.slice(offset, offset + limit);
+async function fetchExistingFiles(repoId) {
+  const existing = new Set();
+  let url = `https://huggingface.co/api/datasets/${repoId}/tree/main/words?recursive=true&limit=${HF_TREE_PAGE_SIZE}`;
+  for (let page = 0; page < 500 && url; page += 1) {
+    const response = await fetch(url, {
+      headers: process.env.HF_TOKEN ? { Authorization: `Bearer ${process.env.HF_TOKEN}` } : {},
+    });
+    if (response.status === 404) return existing;
+    if (!response.ok) throw new Error(`Failed to list HF files: ${response.status} ${response.statusText}`);
+    const items = await response.json();
+    for (const item of items) {
+      if (item?.type === "file" && item.path?.endsWith(".mp3")) existing.add(item.path);
+    }
+    const link = response.headers.get("link") || "";
+    const next = link.match(/<([^>]+)>;\s*rel="next"/);
+    url = next ? next[1] : "";
+  }
+  return existing;
+}
+
+async function prepareBatch(entries, wordsDir, dryRun) {
   let prepared = 0;
   let failed = 0;
+  let skipped = 0;
+  let attemptedUrls = 0;
+  const failures = [];
 
   await fs.rm(wordsDir, { recursive: true, force: true });
   await fs.mkdir(wordsDir, { recursive: true });
 
-  for (const [word, url] of batch) {
+  for (const entry of entries) {
+    const [word, urls] = entry;
     const file = path.join(wordsDir, `${encodeURIComponent(word)}.mp3`);
     try {
-      if (!dryRun) await downloadAudio(url, file);
+      if (dryRun) {
+        prepared += 1;
+        attemptedUrls += Math.min(urls.length, 1);
+        console.log(`OK ${word} -> words/${encodeURIComponent(word)}.mp3 (dry-run, ${urls.length} candidate urls)`);
+        continue;
+      }
+
+      const result = await downloadFirstAvailableAudio(urls, file);
+      attemptedUrls += result.attempts;
+      if (!result.ok) throw new Error(result.error || "all_urls_failed");
       prepared += 1;
-      console.log(`OK ${word} -> words/${encodeURIComponent(word)}.mp3`);
+      console.log(`OK ${word} -> words/${encodeURIComponent(word)}.mp3 (${result.bytes} bytes, url ${result.attempts}/${urls.length})`);
     } catch (error) {
       failed += 1;
+      failures.push({ word, urls: urls.length, error: error.message });
       console.warn(`FAIL ${word}: ${error.message}`);
     }
   }
 
-  return { batchSize: batch.length, prepared, failed };
+  return { prepared, failed, skipped, attemptedUrls, failures };
+}
+
+function selectBatch(entries, existing, mode, offset, limit) {
+  if (mode === "missing") {
+    const batch = [];
+    let scanned = 0;
+    for (let index = offset; index < entries.length && batch.length < limit; index += 1) {
+      const [word] = entries[index];
+      scanned += 1;
+      if (!existing.has(`words/${encodeURIComponent(word)}.mp3`)) batch.push(entries[index]);
+    }
+    return { batch, scanned };
+  }
+  const batch = entries.slice(offset, offset + limit);
+  return { batch, scanned: batch.length };
 }
 
 async function main() {
   const repoId = process.env.HF_REPO_ID || DEFAULT_HF_REPO_ID;
   const sourceJson = process.env.PRONUNCIATION_SOURCE_JSON || DEFAULT_SOURCE_JSON;
+  const mode = String(process.env.IMPORT_MODE || "missing").toLowerCase();
   const startOffset = envNumber("IMPORT_OFFSET", 0);
   const batchSize = envNumber("IMPORT_BATCH_SIZE", envNumber("IMPORT_LIMIT", 500));
   const maxBatches = Math.max(1, envNumber("IMPORT_MAX_BATCHES", 1));
@@ -112,51 +184,66 @@ async function main() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "soil-pronunciation-hf-"));
   const wordsDir = path.join(tempDir, "words");
 
-  if (!dryRun && !process.env.HF_TOKEN) {
-    throw new Error("HF_TOKEN is required for upload");
-  }
+  if (!["range", "missing"].includes(mode)) throw new Error("IMPORT_MODE must be range or missing");
+  if (!dryRun && !process.env.HF_TOKEN) throw new Error("HF_TOKEN is required for upload");
 
   try {
     const entries = toEntries(await readJson(sourceJson));
+    const existing = await fetchExistingFiles(repoId);
     let totalPrepared = 0;
     let totalFailed = 0;
-    let totalSeen = 0;
+    let totalScanned = 0;
+    let totalAttemptedUrls = 0;
     let batchesRun = 0;
+    let offset = startOffset;
 
-    console.log(JSON.stringify({ repoId, sourceJson, total: entries.length, startOffset, batchSize, maxBatches, dryRun }, null, 2));
+    console.log(JSON.stringify({ repoId, sourceJson, sourceEntries: entries.length, existingFiles: existing.size, mode, startOffset, batchSize, maxBatches, dryRun }, null, 2));
 
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
-      const offset = startOffset + batchIndex * batchSize;
       if (offset >= entries.length) break;
+      const selected = selectBatch(entries, existing, mode, offset, batchSize);
+      if (!selected.batch.length) break;
+      console.log(`\n=== Batch ${batchIndex + 1}/${maxBatches}: offset ${offset}, selected ${selected.batch.length}, scanned ${selected.scanned} ===`);
 
-      console.log(`\n=== Batch ${batchIndex + 1}/${maxBatches}: offset ${offset}, limit ${batchSize} ===`);
-      const result = await prepareBatch(entries, offset, batchSize, wordsDir, dryRun);
+      const result = await prepareBatch(selected.batch, wordsDir, dryRun);
       totalPrepared += result.prepared;
       totalFailed += result.failed;
-      totalSeen += result.batchSize;
+      totalScanned += selected.scanned;
+      totalAttemptedUrls += result.attemptedUrls;
       batchesRun += 1;
 
       if (!dryRun && result.prepared > 0) {
         runHfUpload(repoId, tempDir);
+        for (const [word] of selected.batch) {
+          if (!result.failures.some((failure) => failure.word === word)) {
+            existing.add(`words/${encodeURIComponent(word)}.mp3`);
+          }
+        }
       }
 
-      console.log(JSON.stringify({
+      const report = {
         batch: batchIndex + 1,
         offset,
-        seen: result.batchSize,
+        selected: selected.batch.length,
+        scanned: selected.scanned,
         prepared: result.prepared,
         failed: result.failed,
-        nextOffset: offset + result.batchSize,
-      }, null, 2));
+        attemptedUrls: result.attemptedUrls,
+        nextOffset: offset + selected.scanned,
+        failureSample: result.failures.slice(0, 10),
+      };
+      console.log(JSON.stringify(report, null, 2));
+      offset += selected.scanned;
     }
 
     console.log(JSON.stringify({
       batchesRun,
-      seen: totalSeen,
+      scanned: totalScanned,
       prepared: totalPrepared,
       failed: totalFailed,
       uploaded: dryRun ? 0 : totalPrepared,
-      nextOffset: startOffset + totalSeen,
+      attemptedUrls: totalAttemptedUrls,
+      nextOffset: offset,
     }, null, 2));
     if (totalFailed && process.env.FAIL_ON_ERROR === "1") process.exitCode = 1;
   } finally {

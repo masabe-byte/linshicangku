@@ -29,20 +29,26 @@ Suggested first run:
 ```text
 start_offset: 0
 batch_size: 500
-max_batches: 20
+max_batches: 40
+import_mode: missing
 dry_run: 0
 ```
 
-That processes up to 10,000 source entries in one workflow run. Then continue with:
+That scans from the start, skips files already present in Hugging Face, and uploads up to 20,000 missing words in one workflow run. The importer uses `ultimate.json`, so one word can try multiple candidate audio URLs before it gives up.
+
+If the workflow reaches the 60 minute timeout, start the next run with the last printed `nextOffset`.
+
+Continue later with:
 
 ```text
-start_offset: 10000
+start_offset: <last nextOffset>
 batch_size: 500
-max_batches: 20
+max_batches: 40
+import_mode: missing
 dry_run: 0
 ```
 
-Repeat with `20000`, `30000`, and so on until the script reports the final `nextOffset`.
+`import_mode: range` is still available if you want to process a raw offset range without skipping existing files.
 
 The generated extension base URL is:
 
