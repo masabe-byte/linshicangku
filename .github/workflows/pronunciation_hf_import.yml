@@ -1,0 +1,48 @@
+name: Pronunciation Hugging Face Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      offset:
+        description: "Start offset in the pronunciation JSON"
+        required: true
+        default: "0"
+      limit:
+        description: "How many words to import in this run"
+        required: true
+        default: "500"
+      source_json:
+        description: "Pronunciation JSON URL or repo path"
+        required: false
+        default: "https://raw.githubusercontent.com/thousandlemons/English-words-pronunciation-mp3-audio-download/master/data.json"
+      dry_run:
+        description: "Set to 1 to test without uploading"
+        required: false
+        default: "0"
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --upgrade huggingface_hub[cli]
+
+      - name: Import pronunciation audio to Hugging Face Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: masabe/english-pronunciation-audio
+          IMPORT_OFFSET: ${{ inputs.offset }}
+          IMPORT_LIMIT: ${{ inputs.limit }}
+          PRONUNCIATION_SOURCE_JSON: ${{ inputs.source_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: npm run pronunciation:hf:import

@@ -1,0 +1,9 @@
+{
+  "name": "pronunciation-audio-importer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "pronunciation:hf:import": "node scripts/hf-pronunciation-import.mjs"
+  }
+}
