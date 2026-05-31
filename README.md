@@ -57,3 +57,25 @@ The generated extension base URL is:
 ```text
 https://huggingface.co/datasets/masabe/english-pronunciation-audio/resolve/main
 ```
+
+## ECDICT Import
+
+The temporary repository also uploads ECDICT shards for the translation extension dictionary panel.
+
+Open Actions and run **ECDICT Hugging Face Import**:
+
+```text
+source_csv: https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv
+limit: 0
+dry_run: 0
+```
+
+The importer writes small two-letter shards:
+
+```text
+dict/a/ad.json
+dict/h/hi.json
+dict/c/co.json
+```
+
+The extension can fetch only the shard needed for the selected word.

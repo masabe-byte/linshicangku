@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "ecdict:hf:import": "node scripts/hf-ecdict-import.mjs",
     "pronunciation:hf:import": "node scripts/hf-pronunciation-import.mjs"
   }
 }

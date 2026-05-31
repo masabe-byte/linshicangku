@@ -1,0 +1,43 @@
+name: ECDICT Hugging Face Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_csv:
+        description: "ECDICT CSV URL or repo path"
+        required: false
+        default: "https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv"
+      limit:
+        description: "Optional entry limit for testing; 0 means full import"
+        required: true
+        default: "0"
+      dry_run:
+        description: "Set to 1 to test without uploading"
+        required: false
+        default: "0"
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --upgrade huggingface_hub[cli]
+
+      - name: Import ECDICT shards to Hugging Face Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: masabe/english-pronunciation-audio
+          ECDICT_SOURCE_CSV: ${{ inputs.source_csv }}
+          ECDICT_LIMIT: ${{ inputs.limit }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: npm run ecdict:hf:import
