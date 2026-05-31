@@ -3,14 +3,18 @@ name: Pronunciation Hugging Face Import
 on:
   workflow_dispatch:
     inputs:
-      offset:
+      start_offset:
         description: "Start offset in the pronunciation JSON"
         required: true
         default: "0"
-      limit:
-        description: "How many words to import in this run"
+      batch_size:
+        description: "How many JSON entries to process per upload batch"
         required: true
         default: "500"
+      max_batches:
+        description: "How many batches to run in this workflow"
+        required: true
+        default: "20"
       source_json:
         description: "Pronunciation JSON URL or repo path"
         required: false
@@ -41,8 +45,9 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO_ID: masabe/english-pronunciation-audio
-          IMPORT_OFFSET: ${{ inputs.offset }}
-          IMPORT_LIMIT: ${{ inputs.limit }}
+          IMPORT_OFFSET: ${{ inputs.start_offset }}
+          IMPORT_BATCH_SIZE: ${{ inputs.batch_size }}
+          IMPORT_MAX_BATCHES: ${{ inputs.max_batches }}
           PRONUNCIATION_SOURCE_JSON: ${{ inputs.source_json }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: npm run pronunciation:hf:import

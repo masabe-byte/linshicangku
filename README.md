@@ -27,12 +27,22 @@ Open the Actions tab and run **Pronunciation Hugging Face Import**.
 Suggested first run:
 
 ```text
-offset: 0
-limit: 500
+start_offset: 0
+batch_size: 500
+max_batches: 20
 dry_run: 0
 ```
 
-Then continue with offsets `500`, `1000`, `1500`, and so on.
+That processes up to 10,000 source entries in one workflow run. Then continue with:
+
+```text
+start_offset: 10000
+batch_size: 500
+max_batches: 20
+dry_run: 0
+```
+
+Repeat with `20000`, `30000`, and so on until the script reports the final `nextOffset`.
 
 The generated extension base URL is:
 
