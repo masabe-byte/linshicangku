@@ -22,8 +22,8 @@ function normalizeWord(value) {
 function shardPath(word) {
   const clean = normalizeWord(word);
   const first = /^[a-z]/.test(clean[0] || "") ? clean[0] : "_";
-  const third = clean.slice(0, 3).padEnd(3, "_").replace(/[^a-z]/g, "_");
-  return `dict3/${first}/${third}.json`;
+  const fourth = clean.slice(0, 4).padEnd(4, "_").replace(/[^a-z]/g, "_");
+  return `dict4/${first}/${fourth}.json`;
 }
 
 function parseCsvLine(line) {

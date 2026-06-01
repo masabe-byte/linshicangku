@@ -70,12 +70,12 @@ limit: 0
 dry_run: 0
 ```
 
-The importer writes small three-letter shards:
+The importer writes small four-letter shards:
 
 ```text
-dict3/a/add.json
-dict3/h/his.json
-dict3/c/con.json
+dict4/a/addr.json
+dict4/h/hist.json
+dict4/c/conf.json
 ```
 
 The extension can fetch only the shard needed for the selected word.
