@@ -11,6 +11,10 @@ on:
         description: "Optional entry limit for testing; 0 means full import"
         required: true
         default: "0"
+      max_files_per_upload:
+        description: "Upload at most this many shard files per commit"
+        required: true
+        default: "1500"
       dry_run:
         description: "Set to 1 to test without uploading"
         required: false
@@ -39,5 +43,6 @@ jobs:
           HF_REPO_ID: masabe/english-pronunciation-audio
           ECDICT_SOURCE_CSV: ${{ inputs.source_csv }}
           ECDICT_LIMIT: ${{ inputs.limit }}
+          ECDICT_MAX_FILES_PER_UPLOAD: ${{ inputs.max_files_per_upload }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: npm run ecdict:hf:import

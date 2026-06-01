@@ -137,12 +137,42 @@ function runHfUpload(repoId, folder) {
   return result.stdout;
 }
 
+async function copyForBatch(files, sourceRoot, batchRoot) {
+  await fs.rm(batchRoot, { recursive: true, force: true });
+  for (const relativePath of files) {
+    const source = path.join(sourceRoot, relativePath);
+    const target = path.join(batchRoot, relativePath);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(source, target);
+  }
+}
+
+function groupShardFiles(shards, maxFiles) {
+  const groups = new Map();
+  for (const relativePath of shards.keys()) {
+    const parts = relativePath.split("/");
+    const group = parts[1] || "_";
+    const files = groups.get(group) || [];
+    files.push(relativePath);
+    groups.set(group, files);
+  }
+  const batches = [];
+  for (const [group, files] of groups.entries()) {
+    for (let index = 0; index < files.length; index += maxFiles) {
+      batches.push({ group, files: files.slice(index, index + maxFiles) });
+    }
+  }
+  return batches;
+}
+
 async function main() {
   const repoId = process.env.HF_REPO_ID || DEFAULT_HF_REPO_ID;
   const sourceCsv = process.env.ECDICT_SOURCE_CSV || DEFAULT_ECDICT_CSV;
   const dryRun = process.env.DRY_RUN === "1";
   const limit = envNumber("ECDICT_LIMIT", 0);
+  const maxFilesPerUpload = Math.max(100, envNumber("ECDICT_MAX_FILES_PER_UPLOAD", 1500));
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "soil-ecdict-hf-"));
+  const batchDir = await fs.mkdtemp(path.join(os.tmpdir(), "soil-ecdict-hf-batch-"));
 
   if (!dryRun && !process.env.HF_TOKEN) throw new Error("HF_TOKEN is required for upload");
 
@@ -150,11 +180,20 @@ async function main() {
     const csv = await readText(sourceCsv);
     const result = csvToShards(csv, { limit });
     await writeShards(result.shards, tempDir);
+    const batches = groupShardFiles(result.shards, maxFilesPerUpload);
     const sample = [...result.shards.entries()].slice(0, 5).map(([file, entries]) => ({ file, count: Object.keys(entries).length }));
-    console.log(JSON.stringify({ repoId, sourceCsv, dryRun, limit, sourceRowsSeen: result.total, entriesKept: result.kept, shardCount: result.shards.size, sample }, null, 2));
-    if (!dryRun) runHfUpload(repoId, tempDir);
+    console.log(JSON.stringify({ repoId, sourceCsv, dryRun, limit, maxFilesPerUpload, sourceRowsSeen: result.total, entriesKept: result.kept, shardCount: result.shards.size, uploadBatches: batches.length, sample }, null, 2));
+    if (!dryRun) {
+      for (let index = 0; index < batches.length; index += 1) {
+        const batch = batches[index];
+        console.log(`Uploading ECDICT batch ${index + 1}/${batches.length}: group ${batch.group}, files ${batch.files.length}`);
+        await copyForBatch(batch.files, tempDir, batchDir);
+        runHfUpload(repoId, batchDir);
+      }
+    }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(batchDir, { recursive: true, force: true });
   }
 }
 
