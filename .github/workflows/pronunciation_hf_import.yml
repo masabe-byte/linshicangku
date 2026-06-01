@@ -27,6 +27,14 @@ on:
         description: "Set to 1 to test without uploading"
         required: false
         default: "0"
+      upload_delay_ms:
+        description: "Delay between Hugging Face commit uploads"
+        required: true
+        default: "3000"
+      upload_retries:
+        description: "Retries for Hugging Face 429/504 commit errors"
+        required: true
+        default: "4"
 
 jobs:
   import:
@@ -54,5 +62,7 @@ jobs:
           IMPORT_BATCH_SIZE: ${{ inputs.batch_size }}
           IMPORT_MAX_BATCHES: ${{ inputs.max_batches }}
           PRONUNCIATION_SOURCE_JSON: ${{ inputs.source_json }}
+          HF_UPLOAD_DELAY_MS: ${{ inputs.upload_delay_ms }}
+          HF_UPLOAD_RETRIES: ${{ inputs.upload_retries }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: npm run pronunciation:hf:import

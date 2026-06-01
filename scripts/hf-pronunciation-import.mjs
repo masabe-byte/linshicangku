@@ -7,6 +7,8 @@ const DEFAULT_SOURCE_JSON = "https://raw.githubusercontent.com/thousandlemons/En
 const DEFAULT_HF_REPO_ID = "masabe/english-pronunciation-audio";
 const HF_TREE_PAGE_SIZE = 1000;
 const MIN_AUDIO_BYTES = 200;
+const DEFAULT_UPLOAD_RETRIES = 4;
+const DEFAULT_UPLOAD_DELAY_MS = 3000;
 
 function envNumber(name, fallback) {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -112,6 +114,36 @@ function runHfUpload(repoId, folder) {
   return result.stdout;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryAfterMs(error) {
+  const message = String(error?.message || "");
+  const retryAfter = message.match(/Retry after\s+(\d+)\s+seconds/i);
+  if (retryAfter) return (Number.parseInt(retryAfter[1], 10) + 5) * 1000;
+  if (/429 Too Many Requests/i.test(message)) return 180000;
+  if (/504 Gateway Time-out|maximum time in concurrency queue reached/i.test(message)) return 60000;
+  return 0;
+}
+
+async function runHfUploadWithRetry(repoId, folder, { retries, delayMs }) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return runHfUpload(repoId, folder);
+    } catch (error) {
+      lastError = error;
+      const retryAfterMs = getRetryAfterMs(error);
+      if (!retryAfterMs || attempt >= retries) throw error;
+      const waitMs = Math.max(retryAfterMs, delayMs);
+      console.warn(`HF upload throttled/queued. Retry ${attempt + 1}/${retries} after ${Math.ceil(waitMs / 1000)}s.`);
+      await sleep(waitMs);
+    }
+  }
+  throw lastError || new Error("hf upload failed");
+}
+
 async function fetchExistingFiles(repoId) {
   const existing = new Set();
   let url = `https://huggingface.co/api/datasets/${repoId}/tree/main/words?recursive=true&limit=${HF_TREE_PAGE_SIZE}`;
@@ -192,6 +224,8 @@ async function main() {
   const startOffset = envNumber("IMPORT_OFFSET", 0);
   const batchSize = envNumber("IMPORT_BATCH_SIZE", envNumber("IMPORT_LIMIT", 500));
   const maxBatches = Math.max(1, envNumber("IMPORT_MAX_BATCHES", 1));
+  const uploadRetries = Math.max(0, envNumber("HF_UPLOAD_RETRIES", DEFAULT_UPLOAD_RETRIES));
+  const uploadDelayMs = Math.max(0, envNumber("HF_UPLOAD_DELAY_MS", DEFAULT_UPLOAD_DELAY_MS));
   const dryRun = process.env.DRY_RUN === "1";
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "soil-pronunciation-hf-"));
   const wordsDir = path.join(tempDir, "words");
@@ -209,7 +243,7 @@ async function main() {
     let batchesRun = 0;
     let offset = startOffset;
 
-    console.log(JSON.stringify({ repoId, sourceJson, sourceEntries: entries.length, existingFiles: existing.size, mode, startOffset, batchSize, maxBatches, dryRun }, null, 2));
+    console.log(JSON.stringify({ repoId, sourceJson, sourceEntries: entries.length, existingFiles: existing.size, mode, startOffset, batchSize, maxBatches, uploadRetries, uploadDelayMs, dryRun }, null, 2));
 
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
       if (offset >= entries.length) break;
@@ -225,11 +259,15 @@ async function main() {
       batchesRun += 1;
 
       if (!dryRun && result.prepared > 0) {
-        runHfUpload(repoId, tempDir);
+        await runHfUploadWithRetry(repoId, tempDir, { retries: uploadRetries, delayMs: uploadDelayMs });
         for (const [word] of selected.batch) {
           if (!result.failures.some((failure) => failure.word === word)) {
             existing.add(wordPath(word));
           }
+        }
+        if (uploadDelayMs > 0 && batchIndex < maxBatches - 1) {
+          console.log(`Waiting ${Math.ceil(uploadDelayMs / 1000)}s before next HF upload batch.`);
+          await sleep(uploadDelayMs);
         }
       }
 
